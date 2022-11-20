@@ -9,29 +9,35 @@ class Individual():
     def mutate(self, prob):
         # Swap mutation
         if (np.random.random() < prob):
-            for i in range(len(self.value)):
-                swap = self.value[i]
-                new_index = np.random.randint(len(self.value))
-                self.value[i] = self.value[new_index]
-                self.value[new_index] = swap
+            new_index1 = np.random.randint(len(self.value))
+            new_index2 = np.random.randint(len(self.value))
+
+            swap = self.value[new_index1]
+            self.value[new_index1] = self.value[new_index2]
+            self.value[new_index2] = swap
         
     def recombine(self, other):
-        # Crossover, returns child
-        crossover_pos = np.random.randint(0, len(self.value)-1)
-        
-        c1 = self.value[:crossover_pos]
-        c2 = other.value[:crossover_pos]
+        # Ordered corssrover, returns child
+        rand1 = np.random.randint(len(self.value))
+        rand2 = np.random.randint(len(self.value))
 
-        for j1 in self.value:
-            if j1 not in c2:
-                c2 = np.append(c2, j1)
+        start = min(rand1, rand2)
+        end = max(rand1, rand2)
 
-        for j2 in other.value:
-            if j2 not in c1:
-                c1 = np.append(c1, j2)
+        other_values = [x for x in other.value if x not in self.value[start:end]]
 
-        return Individual(c1)
+        child = []
 
+        for i in range(start):
+            child.append(other_values.pop(0))
+
+        for i in range(start, end):
+            child.append(self.value[i])
+
+        for i in range(end, len(self.value)):
+            child.append(other_values.pop(0))
+
+        return Individual(np.array(child))
 
 class Population():
     def __init__(self, size, dist_matrix):
@@ -47,7 +53,7 @@ class Population():
             self.individuals.append(Individual(np.random.permutation(len(self.dist_matrix))))
 
     def elimination(self, offspring: list[Individual]):
-        # Does elimination and replaces original population
+        # Does elimination and replaces original population (alpha + mu)
         self.individuals.extend(offspring)
         self.individuals.sort(key=lambda x: self.fitness(x), reverse=True)
         self.individuals = self.individuals[:self.size]
@@ -102,10 +108,10 @@ class TSP():
 
     def step(self):
         offspring = []
-        for i in range(self.offspring_size):
+        while len(offspring) < self.offspring_size:
             mother: Individual = self.population.selection(self.k)
             father: Individual = self.population.selection(self.k)
-            child: Individual = mother.recombine(father)
+            child = mother.recombine(father)
             child.mutate(self.mut_prob)
             offspring.append(child)
 
@@ -117,7 +123,13 @@ class TSP():
 
 
 class r0884600:
+    # PARAMETERS
     stop = 10
+    population_size=1000
+    offspring_size=1000
+    k=5
+    mutation_probability=0.8
+
     no_change = 0
     counter = 0
 
@@ -138,7 +150,7 @@ class r0884600:
         distanceMatrix = np.loadtxt(file, delimiter=",") 
         file.close()
 
-        tsp = TSP(distanceMatrix, population_size=100, offspring_size=100, k=3, mutation_probability=0.5)
+        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.mutation_probability)
 
         while( self.termination() ):
             self.counter += 1
