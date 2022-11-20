@@ -113,7 +113,7 @@ class TSP():
 
         self.population.elimination(offspring)
 
-        return self.population.best().value, self.population.cost(self.population.best()), self.population.mean()
+        return self.population.best().value, self.population.best_fitness(), self.population.mean()
 
 
 class r0884600:
@@ -129,22 +129,23 @@ class r0884600:
 
     # The evolutionary algorithm’s main loop
     def optimize(self, filename):
+        meanObjective = 0.0 
+        bestObjective = 0.0
+        bestSolution : Individual = None
+
         # Read distance matrix from file.
         file = open(filename)
         distanceMatrix = np.loadtxt(file, delimiter=",") 
         file.close()
 
-        tsp = TSP(distanceMatrix, population_size=1000, offspring_size=1000, k=3, mutation_probability=0.5)
+        tsp = TSP(distanceMatrix, population_size=100, offspring_size=100, k=3, mutation_probability=0.5)
 
         while( self.termination() ):
             self.counter += 1
-            meanObjective = 0.0 
-            bestObjective = 0.0
-            bestSolution : Individual = None
             prev_obj = bestObjective
 
             bestSolution, bestObjective, meanObjective = tsp.step()
-
+            
             if (prev_obj == bestObjective):
                 self.no_change += 1
             else:
@@ -154,8 +155,7 @@ class r0884600:
             if timeLeft < 0: 
                 break
             
-            print("Iteration: ", self.counter, "\nMean: ", meanObjective, "\nBest: ", bestObjective)
-        
+            print("\nIteration: ", self.counter, "\nMean: ", meanObjective, "\nBest: ", bestObjective, "\nPath cost: ", 1/bestObjective)
         return 0
 
 program = r0884600()
