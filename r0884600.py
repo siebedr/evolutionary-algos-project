@@ -54,9 +54,8 @@ class Population():
 
     def elimination(self, offspring: list[Individual]):
         # Does elimination and replaces original population (alpha + mu)
-        self.individuals.extend(offspring)
-        self.individuals.sort(key=lambda x: self.fitness(x), reverse=True)
-        self.individuals = self.individuals[:self.size]
+        offspring.sort(key=lambda x: self.fitness(x), reverse=True)
+        self.individuals = offspring[:self.size]
 
     def selection(self, k) -> Individual: 
         # k tournament selection
@@ -125,7 +124,7 @@ class TSP():
 class r0884600:
     # PARAMETERS
     stop = 10
-    population_size=1000
+    population_size=500
     offspring_size=1000
     k=5
     mutation_probability=0.8
@@ -171,4 +170,4 @@ class r0884600:
         return 0
 
 program = r0884600()
-program.optimize("./Data/tour50.csv")
+program.optimize("./Data/tour250.csv")
