@@ -1,43 +1,67 @@
 import Reporter
 import numpy as np
 import random
+import time
+from numba import njit
+from numba.experimental import jitclass
+
+# NUMBA functions to improve speed
+@njit
+def mutate_helper(path, prob):
+    if (np.random.random() < prob):
+            new_index1 = np.random.randint(len(path))
+            new_index2 = np.random.randint(len(path))
+
+            swap = path[new_index1]
+            path[new_index1] = path[new_index2]
+            path[new_index2] = swap
+
+@njit
+def recombination_helper(path1, path2):
+    rand1 = np.random.randint(len(path1))
+    rand2 = np.random.randint(len(path1))
+
+    start = min(rand1, rand2)
+    end = max(rand1, rand2)
+
+    other_values = [x for x in path2 if x not in path1[start:end]]
+
+    child = np.empty(len(path1), dtype=np.int32)
+
+    for i in range(start):
+        child[i] = other_values.pop(0)
+
+    for i in range(start, end):
+        child[i] = path1[i]
+
+    for i in range(end, len(path1)):
+        child[i] = other_values.pop(0)
+
+    return child
 
 class Individual():
     def __init__(self, value):
         self.value = value
-
+    
     def mutate(self, prob):
         # Swap mutation
-        if (np.random.random() < prob):
-            new_index1 = np.random.randint(len(self.value))
-            new_index2 = np.random.randint(len(self.value))
-
-            swap = self.value[new_index1]
-            self.value[new_index1] = self.value[new_index2]
-            self.value[new_index2] = swap
+        mutate_helper(self.value, prob)
         
     def recombine(self, other):
         # Ordered corssrover, returns child
-        rand1 = np.random.randint(len(self.value))
-        rand2 = np.random.randint(len(self.value))
+        return Individual(recombination_helper(self.value, other.value))
 
-        start = min(rand1, rand2)
-        end = max(rand1, rand2)
+# NUMBA functions to improve speed
+@njit
+def cost_helper(path, dist):
+    total = 0
 
-        other_values = [x for x in other.value if x not in self.value[start:end]]
+    for i in range(len(path)-1):
+        val = path[i]
+        next = path[i+1]
+        total += dist[val][next]
 
-        child = []
-
-        for i in range(start):
-            child.append(other_values.pop(0))
-
-        for i in range(start, end):
-            child.append(self.value[i])
-
-        for i in range(end, len(self.value)):
-            child.append(other_values.pop(0))
-
-        return Individual(np.array(child))
+    return total + dist[path[len(path)-1]][0]
 
 class Population():
     def __init__(self, size, dist_matrix):
@@ -67,18 +91,11 @@ class Population():
         for ind in self.individuals:
             ind.mutate(prob)
 
-    def fitness(self, individual : Individual):
+    def fitness(self, individual : Individual) -> float:
         return 1/self.cost(individual)
-
-    def cost(self, individual : Individual):
-        total = 0
-
-        for i in range(len(individual.value)-1):
-            val = individual.value[i]
-            next = individual.value[i+1]
-            total += self.dist_matrix[val][next]
-
-        return total + self.dist_matrix[individual.value[len(individual.value)-1]][0]
+        
+    def cost(self, individual : Individual) -> float:
+        return cost_helper(individual.value, self.dist_matrix)
 
     def best(self) -> Individual:
         return self.individuals[0]
@@ -123,7 +140,7 @@ class TSP():
 
 class r0884600:
     # PARAMETERS
-    stop = 10
+    stop = 1
     population_size=500
     offspring_size=1000
     k=5
@@ -132,18 +149,25 @@ class r0884600:
     no_change = 0
     counter = 0
 
+    meanObjective = 0.0 
+    bestObjective = 0.0
+    bestSolution : Individual = None
+
     def __init__(self):
         self.reporter = Reporter.Reporter(self.__class__.__name__)
 
-    def termination(self):        
+    def terminationOnBestConverged(self):    
+        if (self.prev_obj == self.bestObjective):
+            self.no_change += 1
+        else:
+            self.no_change = 0    
         return self.no_change != self.stop
+
+    def terminationOnFixedIterations(self, iteration):    
+        return self.counter != iteration
 
     # The evolutionary algorithm’s main loop
     def optimize(self, filename):
-        meanObjective = 0.0 
-        bestObjective = 0.0
-        bestSolution : Individual = None
-
         # Read distance matrix from file.
         file = open(filename)
         distanceMatrix = np.loadtxt(file, delimiter=",") 
@@ -151,23 +175,21 @@ class r0884600:
 
         tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.mutation_probability)
 
-        while( self.termination() ):
+        while( self.terminationOnFixedIterations(5) ):
             self.counter += 1
-            prev_obj = bestObjective
+            self.prev_obj = self.bestObjective
 
-            bestSolution, bestObjective, meanObjective = tsp.step()
+            self.bestSolution, self.bestObjective, self.meanObjective = tsp.step()
             
-            if (prev_obj == bestObjective):
-                self.no_change += 1
-            else:
-                self.no_change = 0
-            
-            timeLeft = self.reporter.report(meanObjective , bestObjective , bestSolution)
+            timeLeft = self.reporter.report(self.meanObjective , self.bestObjective , self.bestSolution)
             if timeLeft < 0: 
                 break
             
-            print("\nIteration: ", self.counter, "\nMean: ", meanObjective, "\nBest: ", bestObjective, "\nPath cost: ", 1/bestObjective)
+            print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective, "\nPath cost: ", 1/self.bestObjective)
         return 0
 
 program = r0884600()
-program.optimize("./Data/tour250.csv")
+start = time.time()
+program.optimize("./Data/tour50.csv")
+end = time.time()
+print("\nRUNTIME: ", end - start)
