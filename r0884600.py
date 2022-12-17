@@ -4,28 +4,36 @@ import random
 import time
 from numba import njit
 from plot import basic_plot
+from math import sqrt, exp
 
 
 # NUMBA functions to improve speed
 @njit
-def swap_mutation(path):
-    new_index1 = np.random.randint(len(path))
-    new_index2 = np.random.randint(len(path))
+def swap_mutation(path, mutation_rate):
+    if np.random.rand() < mutation_rate:
+        new_index1 = np.random.randint(len(path))
+        new_index2 = np.random.randint(len(path))
 
-    swap = path[new_index1]
-    path[new_index1] = path[new_index2]
-    path[new_index2] = swap
+        swap = path[new_index1]
+        path[new_index1] = path[new_index2]
+        path[new_index2] = swap
 
 
 @njit
-def inverse_mutation(path):
-    rand1 = np.random.randint(len(path))
-    rand2 = np.random.randint(len(path))
+def inverse_mutation(path, mutation_rate):
+    if np.random.rand() < mutation_rate:
+        rand1 = np.random.randint(len(path))
+        rand2 = np.random.randint(len(path))
 
-    start_node = min(rand1, rand2)
-    end_node = max(rand1, rand2)
+        start_node = min(rand1, rand2)
+        end_node = max(rand1, rand2)
 
-    path[start_node:end_node] = path[start_node:end_node][::-1]
+        path[start_node:end_node] = path[start_node:end_node][::-1]
+
+
+@njit(fastmath=True)
+def adapt_mutation(mutation_rate, lr):
+    return min(0.7, mutation_rate * exp(lr * np.random.rand()))
 
 
 @njit
@@ -53,16 +61,21 @@ def recombination_helper(path1, path2):
 
 
 class Individual:
-    def __init__(self, value):
+    def __init__(self, value, mutation_rate=0.5):
         self.value = value
+        self.mutation_rate = mutation_rate
 
-    def mutate(self, prob):
-        if np.random.random() < prob:
-            inverse_mutation(self.value)
+    def mutate(self, lr):
+        self.mutation_rate = adapt_mutation(self.mutation_rate, lr)
+
+        inverse_mutation(self.value, self.mutation_rate)
 
     def recombine(self, other):
         # Ordered crossover, returns child
-        return Individual(recombination_helper(self.value, other.value))
+
+        w = np.random.rand() - 0.5
+        new_mutation_rate = self.mutation_rate - w*other.mutation_rate
+        return Individual(recombination_helper(self.value, other.value), max(0.1, new_mutation_rate))
 
 
 # NUMBA functions to improve speed
@@ -102,9 +115,9 @@ class Population:
         possible.sort(key=lambda x: self.fitness(x), reverse=True)
         return possible[0]
 
-    def mutate_all(self, prob):
+    def mutate_all(self, lr):
         for ind in self.individuals:
-            ind.mutate(prob)
+            ind.mutate(lr)
 
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
@@ -118,7 +131,7 @@ class Population:
     def best_fitness(self) -> float:
         return self.fitness(self.individuals[0])
 
-    def mean(self) -> Individual:
+    def mean(self) -> float:
         total_fitness = 0
         for ind in self.individuals:
             total_fitness += self.fitness(ind)
@@ -128,12 +141,12 @@ class Population:
 
 class TSP:
 
-    def __init__(self, distance_matrix, population_size, offspring_size, k, mutation_probability):
+    def __init__(self, distance_matrix, population_size, offspring_size, k, learning_rate):
         self.distance_matrix = distance_matrix
         self.population_size = population_size
         self.offspring_size = offspring_size
         self.k = k
-        self.mut_prob = mutation_probability
+        self.lr = learning_rate
 
         self.population = Population(self.population_size, self.distance_matrix)
 
@@ -144,10 +157,10 @@ class TSP:
             mother: Individual = self.population.selection(self.k)
             father: Individual = self.population.selection(self.k)
             child = mother.recombine(father)
-            child.mutate(self.mut_prob)
+            child.mutate(self.lr)
             offspring.append(child)
 
-        self.population.mutate_all(self.mut_prob)
+        self.population.mutate_all(self.lr)
 
         self.population.elimination(offspring)
 
@@ -156,11 +169,11 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 10
-    population_size = 500
-    offspring_size = 1000
+    stop = 100
+    population_size = 1000
+    offspring_size = 1500
     k = 5
-    mutation_probability = 0.8
+    learning_rate = None
 
     no_change = 0
     counter = 0
@@ -180,6 +193,19 @@ class r0884600:
             self.no_change += 1
         else:
             self.no_change = 0
+
+        self.prev_obj = self.bestObjective
+
+        return self.no_change != self.stop
+
+    def termination_on_mean_converged(self, decimals=8):
+        if self.meanObjective - self.prev_obj < 10 ** -decimals:
+            self.no_change += 1
+        else:
+            self.no_change = 0
+
+        self.prev_obj = self.meanObjective
+
         return self.no_change != self.stop
 
     def termination_on_fixed_iterations(self, iteration):
@@ -190,14 +216,14 @@ class r0884600:
         # Read distance matrix from file.
         distanceMatrix = np.loadtxt(filename, delimiter=",")
 
+        self.learning_rate = 1 / sqrt(len(distanceMatrix))  # Proven to be optimal
+
         # Initialize the population.
-        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.mutation_probability)
+        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.learning_rate)
 
         # Run the algorithm until termination condition is met.
         while self.termination_on_best_converged():
             self.counter += 1
-            self.prev_obj = self.bestObjective
-
             self.bestSolution, self.bestObjective, self.meanObjective = tsp.step()
 
             timeLeft = self.reporter.report(self.meanObjective, self.bestObjective, self.bestSolution)
@@ -215,7 +241,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour250.csv")
+program.optimize("./Data/tour500.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
