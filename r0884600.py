@@ -5,16 +5,27 @@ import time
 from numba import njit
 from plot import basic_plot
 
+
 # NUMBA functions to improve speed
 @njit
-def mutate_helper(path, prob):
-    if np.random.random() < prob:
-        new_index1 = np.random.randint(len(path))
-        new_index2 = np.random.randint(len(path))
+def swap_mutation(path):
+    new_index1 = np.random.randint(len(path))
+    new_index2 = np.random.randint(len(path))
 
-        swap = path[new_index1]
-        path[new_index1] = path[new_index2]
-        path[new_index2] = swap
+    swap = path[new_index1]
+    path[new_index1] = path[new_index2]
+    path[new_index2] = swap
+
+
+@njit
+def inverse_mutation(path):
+    rand1 = np.random.randint(len(path))
+    rand2 = np.random.randint(len(path))
+
+    start_node = min(rand1, rand2)
+    end_node = max(rand1, rand2)
+
+    path[start_node:end_node] = path[start_node:end_node][::-1]
 
 
 @njit
@@ -46,8 +57,8 @@ class Individual:
         self.value = value
 
     def mutate(self, prob):
-        # Swap mutation
-        mutate_helper(self.value, prob)
+        if np.random.random() < prob:
+            inverse_mutation(self.value)
 
     def recombine(self, other):
         # Ordered crossover, returns child
@@ -196,12 +207,15 @@ class r0884600:
             if self.counter % self.log_interval == 0:
                 print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
                       "\nPath cost: ", 1 / self.bestObjective)
+
+        print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
+              "\nPath cost: ", 1 / self.bestObjective)
         return 0
 
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour100.csv")
+program.optimize("./Data/tour250.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
