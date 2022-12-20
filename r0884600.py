@@ -169,7 +169,7 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 100
+    stop = 20
     population_size = 1000
     offspring_size = 1500
     k = 5
@@ -241,7 +241,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour500.csv")
+program.optimize("./Data/tour250.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
