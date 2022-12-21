@@ -3,8 +3,7 @@ import numpy as np
 import random
 import time
 from numba import njit
-from plot import basic_plot
-from math import sqrt, exp
+from plot import basic_plot, plot_mutation_rate
 
 
 # NUMBA functions to improve speed
@@ -31,13 +30,8 @@ def inverse_mutation(path, mutation_rate):
         path[start_node:end_node] = path[start_node:end_node][::-1]
 
 
-@njit(fastmath=True)
-def adapt_mutation(mutation_rate, lr):
-    return min(0.7, mutation_rate * exp(lr * np.random.rand()))
-
-
 @njit
-def recombination_helper(path1, path2):
+def ordered_crossover(path1, path2, mut_1, mut_2):
     rand1 = np.random.randint(len(path1))
     rand2 = np.random.randint(len(path1))
 
@@ -57,25 +51,105 @@ def recombination_helper(path1, path2):
     for i in range(end_node, len(path1)):
         child[i] = other_values.pop(0)
 
-    return child
+    # Calculate combined mutation rate
+    beta = 2 * np.random.rand() - 0.5
+    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
+
+    return child, new_rate
+
+
+@njit
+def PMX_crossover(path1, path2, mut_1, mut_2):
+    rand1 = np.random.randint(len(path1))
+    rand2 = np.random.randint(len(path1))
+
+    start_node = min(rand1, rand2)
+    end_node = max(rand1, rand2)
+
+    child = np.empty(len(path1), dtype=np.int32)
+
+    # Copy swath
+    child[start_node:end_node] = path1[start_node:end_node]
+
+    # Values of p2 in swath that are not in child
+    other_values = [x for x in path2[start_node:end_node] if x not in path1[start_node:end_node]]
+
+    for i in range(len(path1)):
+        if i < start_node or i >= end_node:
+            if path2[i] not in path1[start_node:end_node]:
+                child[i] = path2[i]
+            else:
+                child[i] = other_values.pop(0)
+
+    # Calculate combined mutation rate
+    beta = 2 * np.random.rand() - 0.5
+    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
+
+    return child, new_rate
+
+
+@njit
+def cycle_crossover(path1, path2, mut_1, mut_2):
+    child = np.full(len(path1), -1, dtype=np.int32)
+    index = np.random.randint(len(path1))
+    node = path1[index]
+
+    # Cycle from p1
+    while node not in child:
+        child[index] = node
+        index = np.where(path1 == path2[index])[0][0]
+        node = path1[index]
+
+    # Fill with remaining values from p2
+    for i in range(len(path1)):
+        if child[i] == -1:
+            child[i] = path2[i]
+
+    # Calculate combined mutation rate
+    beta = 2 * np.random.rand() - 0.5
+    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
+
+    return child, new_rate
+
+
+@njit
+def two_opt(path, dist):
+    best = path
+
+    if np.random.rand() < 0.1:
+        best_dist = cost_helper(path, dist)
+
+        for i in range(len(path)):
+            for j in range(i + 1, len(path)):
+                new_path = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
+                new_dist = cost_helper(new_path, dist)
+
+                if new_dist < best_dist:
+                    best = new_path
+                    best_dist = new_dist
+
+    return best
 
 
 class Individual:
-    def __init__(self, value, mutation_rate=0.5):
+    def __init__(self, value, mutation_rate=None):
         self.value = value
-        self.mutation_rate = mutation_rate
+        if mutation_rate is None:
+            self.mutation_rate = 0.1 + (0.3 * np.random.rand())
+        else:
+            self.mutation_rate = mutation_rate
 
-    def mutate(self, lr):
-        self.mutation_rate = adapt_mutation(self.mutation_rate, lr)
-
+    def mutate(self):
         inverse_mutation(self.value, self.mutation_rate)
+
+    def local_search_operator(self, dist):
+        two_opt(self.value, dist)
 
     def recombine(self, other):
         # Ordered crossover, returns child
-
-        w = np.random.rand() - 0.5
-        new_mutation_rate = self.mutation_rate - w*other.mutation_rate
-        return Individual(recombination_helper(self.value, other.value), max(0.1, new_mutation_rate))
+        child, mut_rate = PMX_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
+        return Individual(child, mut_rate)
+        # return Individual(recombination_helper(self.value, other.value))
 
 
 # NUMBA functions to improve speed
@@ -115,9 +189,13 @@ class Population:
         possible.sort(key=lambda x: self.fitness(x), reverse=True)
         return possible[0]
 
-    def mutate_all(self, lr):
+    def mutate_all(self):
         for ind in self.individuals:
-            ind.mutate(lr)
+            ind.mutate()
+
+    def ls_all(self):
+        for ind in self.individuals:
+            ind.local_search_operator(self.dist_matrix)
 
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
@@ -141,14 +219,19 @@ class Population:
 
 class TSP:
 
-    def __init__(self, distance_matrix, population_size, offspring_size, k, learning_rate):
+    def __init__(self, distance_matrix, population_size, offspring_size, k):
         self.distance_matrix = distance_matrix
         self.population_size = population_size
         self.offspring_size = offspring_size
         self.k = k
-        self.lr = learning_rate
 
         self.population = Population(self.population_size, self.distance_matrix)
+
+    def avg_mut_rate(self):
+        total = 0
+        for ind in self.population.individuals:
+            total += ind.mutation_rate
+        return total / self.population_size
 
     def step(self):
         offspring = []
@@ -157,10 +240,12 @@ class TSP:
             mother: Individual = self.population.selection(self.k)
             father: Individual = self.population.selection(self.k)
             child = mother.recombine(father)
-            child.mutate(self.lr)
+            child.mutate()
             offspring.append(child)
 
-        self.population.mutate_all(self.lr)
+        self.population.mutate_all()
+
+        # self.population.ls_all()
 
         self.population.elimination(offspring)
 
@@ -169,11 +254,10 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 20
+    stop = 100
     population_size = 1000
-    offspring_size = 1500
+    offspring_size = 2000
     k = 5
-    learning_rate = None
 
     no_change = 0
     counter = 0
@@ -183,7 +267,7 @@ class r0884600:
     bestSolution: Individual = None
     prev_obj = 0
 
-    log_interval = 100
+    log_interval = 5
 
     def __init__(self):
         self.reporter = Reporter.Reporter(self.__class__.__name__)
@@ -216,32 +300,32 @@ class r0884600:
         # Read distance matrix from file.
         distanceMatrix = np.loadtxt(filename, delimiter=",")
 
-        self.learning_rate = 1 / sqrt(len(distanceMatrix))  # Proven to be optimal
-
         # Initialize the population.
-        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.learning_rate)
+        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k)
 
         # Run the algorithm until termination condition is met.
         while self.termination_on_best_converged():
             self.counter += 1
             self.bestSolution, self.bestObjective, self.meanObjective = tsp.step()
 
-            timeLeft = self.reporter.report(self.meanObjective, self.bestObjective, self.bestSolution)
+            timeLeft = self.reporter.report(self.meanObjective, self.bestObjective, self.bestSolution,
+                                            tsp.avg_mut_rate())
             if timeLeft < 0:
                 break
 
             if self.counter % self.log_interval == 0:
                 print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
-                      "\nPath cost: ", 1 / self.bestObjective)
+                      "\nPath cost: ", (1 / self.bestObjective if self.bestObjective != 0.0 else None))
 
         print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
-              "\nPath cost: ", 1 / self.bestObjective)
+              "\nPath cost: ", (1 / self.bestObjective if self.bestObjective != 0.0 else None))
         return 0
 
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour250.csv")
+program.optimize("./Data/tour500.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
+plot_mutation_rate()

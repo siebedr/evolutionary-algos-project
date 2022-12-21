@@ -12,7 +12,7 @@ def parse_report(filename):
         typed_row = []
 
         for j in range(len(tmp_row)):
-            if j == 0 or j >= 4:
+            if j == 0 or j >= 5:
                 typed_row.append(int(tmp_row[j]))
             else:
                 typed_row.append(float(tmp_row[j]))
@@ -28,5 +28,14 @@ def basic_plot(filename="r0884600.csv"):
     plt.plot(rows[:, 0], rows[:, 3], label="Best")
     plt.plot(rows[:, 0], rows[:, 2], label="Mean")
     plt.ylabel('Fitness')
+    plt.xlabel('Iteration')
+    plt.show()
+
+
+def plot_mutation_rate(filename="r0884600.csv"):
+    rows = parse_report(filename)
+
+    plt.plot(rows[:, 0], rows[:, 4], label="avg_mut_rate")
+    plt.ylabel('Mutation rate')
     plt.xlabel('Iteration')
     plt.show()
