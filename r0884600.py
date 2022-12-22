@@ -28,6 +28,8 @@ def inverse_mutation(path, mutation_rate):
         end_node = max(rand1, rand2)
 
         path[start_node:end_node] = path[start_node:end_node][::-1]
+        return start_node, end_node
+    return 0, 0
 
 
 @njit
@@ -127,32 +129,56 @@ def two_opt(path, dist):
                 if new_dist < best_dist:
                     best = new_path
                     best_dist = new_dist
-
     return best
 
 
-class Individual:
-    def __init__(self, value, mutation_rate=None):
-        self.value = value
-        if mutation_rate is None:
-            self.mutation_rate = 0.1 + (0.3 * np.random.rand())
-        else:
-            self.mutation_rate = mutation_rate
+@njit
+def compute_similarity(route1, route2):
+    counter = 0
 
-    def mutate(self):
-        inverse_mutation(self.value, self.mutation_rate)
+    for i in range(len(route1)):
+        index = np.where(route2 == route1[i])[0][0]
+        if route1[(i + 1) % len(route1)] == route2[(index + 1) % len(route2)]:
+            counter += 1
 
-    def local_search_operator(self, dist):
-        two_opt(self.value, dist)
-
-    def recombine(self, other):
-        # Ordered crossover, returns child
-        child, mut_rate = PMX_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
-        return Individual(child, mut_rate)
-        # return Individual(recombination_helper(self.value, other.value))
+    return counter / len(route1)
 
 
-# NUMBA functions to improve speed
+@njit
+def hamming_distance(route1, route2):
+    # result in percentage
+    return (len(route1) - np.sum(route1 == route2)) / len(route1)
+
+
+@njit
+def create_route_dist_matrix(routes):
+    """Creates matrix that contains distances between routes in population"""
+    matrix = np.zeros((len(routes), len(routes)), dtype=np.float32)
+
+    # Count intersections
+    for i in range(len(routes)):
+        for j in range(len(routes)):
+            if j < i:
+                matrix[i, j] = matrix[j, i]
+            else:
+                matrix[i, j] = hamming_distance(routes[i], routes[j])
+    return matrix
+
+
+@njit
+def fitness_sharing(path_ind, route_dist_matrix, fitness, sigma=0.2, alpha=1):
+    beta = 1
+
+    for i in range(len(route_dist_matrix)):
+        if i != path_ind:
+            dist = route_dist_matrix[path_ind, i]
+            if dist <= sigma:
+                beta += 1 - (dist / sigma) ** alpha
+
+    result = fitness / beta ** np.sign(fitness)
+    return result
+
+
 @njit
 def cost_helper(path, dist):
     total = 0
@@ -165,6 +191,27 @@ def cost_helper(path, dist):
     return total + dist[path[len(path) - 1]][0]
 
 
+class Individual:
+    def __init__(self, value, mutation_rate=None):
+        self.value = value
+        if mutation_rate is None:
+            self.mutation_rate = 0.1 + (0.3 * np.random.rand())
+        else:
+            self.mutation_rate = mutation_rate
+        self.neighbour_dist = None
+
+    def mutate(self):
+        inverse_mutation(self.value, self.mutation_rate)
+
+    def local_search_operator(self, dist):
+        two_opt(self.value, dist)
+
+    def recombine(self, other):
+        # Ordered crossover, returns child
+        child, mut_rate = PMX_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
+        return Individual(child, mut_rate)
+
+
 class Population:
     def __init__(self, size, dist_matrix):
         self.size = size
@@ -172,6 +219,7 @@ class Population:
 
         self.individuals: list[Individual] = []
         self.init_population()
+        self.route_dist_matrix = None
 
     def init_population(self):
         # Random initialization
@@ -186,8 +234,12 @@ class Population:
     def selection(self, k) -> Individual:
         # k tournament selection
         possible = random.choices(self.individuals, k=k)
-        possible.sort(key=lambda x: self.fitness(x), reverse=True)
+        possible.sort(key=lambda x: self.fitness_sharing(x), reverse=True)
         return possible[0]
+
+    def update_route_dist_matrix(self):
+        values = np.array([i.value for i in self.individuals])
+        self.route_dist_matrix = create_route_dist_matrix(values)
 
     def mutate_all(self):
         for ind in self.individuals:
@@ -197,8 +249,14 @@ class Population:
         for ind in self.individuals:
             ind.local_search_operator(self.dist_matrix)
 
+    # METRICS
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
+
+    def fitness_sharing(self, individual: Individual) -> float:
+        return fitness_sharing(self.individuals.index(individual), self.route_dist_matrix, self.fitness(individual))
+
+
 
     def cost(self, individual: Individual) -> float:
         return cost_helper(individual.value, self.dist_matrix)
@@ -236,6 +294,9 @@ class TSP:
     def step(self):
         offspring = []
 
+        # Update route distance matrix for selection fitness sharing
+        self.population.update_route_dist_matrix()
+
         while len(offspring) < self.offspring_size:
             mother: Individual = self.population.selection(self.k)
             father: Individual = self.population.selection(self.k)
@@ -248,15 +309,14 @@ class TSP:
         # self.population.ls_all()
 
         self.population.elimination(offspring)
-
-        return self.population.best().value, self.population.best_fitness(), self.population.mean()
+        return self.population.best(), self.population.best_fitness(), self.population.mean()
 
 
 class r0884600:
     # PARAMETERS
-    stop = 100
-    population_size = 1000
-    offspring_size = 2000
+    stop = 50
+    population_size = 500
+    offspring_size = 1000
     k = 5
 
     no_change = 0
@@ -267,18 +327,17 @@ class r0884600:
     bestSolution: Individual = None
     prev_obj = 0
 
-    log_interval = 5
+    log_interval = 50
 
     def __init__(self):
         self.reporter = Reporter.Reporter(self.__class__.__name__)
 
     def termination_on_best_converged(self):
-        if self.prev_obj == self.bestObjective:
+        if self.prev_obj >= self.bestObjective:
             self.no_change += 1
         else:
             self.no_change = 0
-
-        self.prev_obj = self.bestObjective
+            self.prev_obj = self.bestObjective
 
         return self.no_change != self.stop
 
@@ -303,28 +362,34 @@ class r0884600:
         # Initialize the population.
         tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k)
 
+        step_time = 0
+
         # Run the algorithm until termination condition is met.
         while self.termination_on_best_converged():
+            step_start = time.time()
             self.counter += 1
             self.bestSolution, self.bestObjective, self.meanObjective = tsp.step()
 
-            timeLeft = self.reporter.report(self.meanObjective, self.bestObjective, self.bestSolution,
+            timeLeft = self.reporter.report(self.meanObjective, self.bestObjective, self.bestSolution.value,
                                             tsp.avg_mut_rate())
             if timeLeft < 0:
                 break
 
+            timing = time.time() - step_start
+            step_time += timing
+
             if self.counter % self.log_interval == 0:
-                print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
-                      "\nPath cost: ", (1 / self.bestObjective if self.bestObjective != 0.0 else None))
+                print("\nIteration: ", self.counter, " (", timing, ")\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
+                      "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix))
 
         print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
-              "\nPath cost: ", (1 / self.bestObjective if self.bestObjective != 0.0 else None))
+              "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix), "\nAvg step time: ", step_time/self.counter,)
         return 0
 
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour500.csv")
+program.optimize("./Data/tour50.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
