@@ -202,8 +202,8 @@ def fitness_sharing_with_matrix(path_ind, route_dist_matrix, fitness, sigma=0.2,
 
 
 @njit
-def fitness_sharing_with_list(route_distances, fitness, sigma=0.1, alpha=1):
-    beta = 1
+def fitness_sharing_with_list(route_distances, fitness, sigma=0.2, alpha=1):
+    beta = 0
 
     for i in range(len(route_distances)):
         dist = route_distances[i]
@@ -227,11 +227,11 @@ def cost_helper(path, dist):
 
 
 @njit
-def calc_route_distances(indices, routes, route):
+def calc_route_distances(indices: set, routes, route):
     route_distances = np.ones((len(routes)), dtype=np.float32)
 
-    for i in range(len(indices)):
-        route_distances[indices[i]] = hamming_distance(route, routes[indices[i]])
+    for i in indices:
+        route_distances[i] = hamming_distance(route, routes[i])
 
     return route_distances
 
@@ -241,32 +241,27 @@ def shared_elimination(population, dist_matrix, keep):
     """" Population should be alpha+mu """""
 
     survivors = np.empty(keep, dtype=np.int32)
-    battling = np.arange(len(population))  # Indexes that are still in the game
-    fitness = [1 / cost_helper(x, dist_matrix) for x in population]
+    battling = set([i for i in range(len(population))])  # Indexes that are still in the game
+    fitness = np.array([1 / cost_helper(x, dist_matrix) for x in population])
 
     relevant = set()  # Indexes of routes that are relevant to recalculate
 
     surviving_route_distances = np.empty((keep, len(population)), dtype=np.float32)
 
     for i in range(len(survivors)):
-        best_battler = 0
-        best_fitness = fitness[battling[best_battler]]
+        # Update relevant fitnesses
+        for j in relevant:
+            fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
 
-        for e, j in enumerate(battling):
+        relevant.clear()
 
-            if j in relevant:
-                fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
-                relevant.remove(j)
-
-            if fitness[j] > best_fitness:
-                best_fitness = fitness[j]
-                best_battler = e
-
-        survivors[i] = battling[best_battler]
-        battling = np.delete(battling, best_battler)
+        # Take best fitness
+        survivors[i] = np.argmax(fitness)
+        battling.remove(survivors[i])
+        fitness[survivors[i]] = -1
 
         best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
-        [relevant.add(survivors[i]) for x in best_route_distances if
+        [relevant.add(y) for y, x in enumerate(best_route_distances) if
          x <= 0.2]  # Add all routes that are close to the best route
         surviving_route_distances[i] = best_route_distances
 
@@ -286,7 +281,7 @@ class Individual:
         inverse_mutation(self.value, self.mutation_rate)
 
     def local_search_operator(self, dist):
-        light_two_opt(self.value, dist)
+        two_opt(self.value, dist)
 
     def recombine(self, other):
         # Ordered crossover, returns child
@@ -400,7 +395,7 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 300
+    stop = 100
     population_size = 500
     offspring_size = 1000
     k = 5
