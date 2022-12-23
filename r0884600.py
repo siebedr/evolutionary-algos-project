@@ -1,8 +1,10 @@
-import Reporter
-import numpy as np
 import random
 import time
+
+import numpy as np
 from numba import njit
+
+import Reporter
 from plot import basic_plot, plot_mutation_rate
 
 
@@ -115,20 +117,49 @@ def cycle_crossover(path1, path2, mut_1, mut_2):
 
 
 @njit
-def two_opt(path, dist):
+def two_opt(path, dist, depth=-1):
+    # Pre calculate distances
+    dists = np.zeros(len(path))
+    reverse_dists = np.zeros(len(path))
+
+    for i in range(len(path)):
+        dists[i] = dist[path[i], path[(i + 1) % len(path)]]
+        reverse_dists[i] = dist[path[(i + 1) % len(path)], path[i]]
+
     best = path
+    best_dist = np.sum(dists)
+    counter = 0
 
-    if np.random.rand() < 0.1:
-        best_dist = cost_helper(path, dist)
+    for i in range(len(path)):
+        for j in range(i + 2, len(path)):
+            new_cost = np.sum(dists[:i])
+            new_cost += np.sum(reverse_dists[i:j + 1])
+            new_cost += np.sum(dists[j + 1:])
+            new_cost += dist[path[i], path[(i + 1) % len(path)]] + dist[path[j], path[(j + 1) % len(path)]]
 
-        for i in range(len(path)):
-            for j in range(i + 1, len(path)):
-                new_path = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
-                new_dist = cost_helper(new_path, dist)
+            if new_cost < best_dist:
+                counter += 1
+                best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
+                best_dist = new_cost
 
-                if new_dist < best_dist:
-                    best = new_path
-                    best_dist = new_dist
+            if depth != -1 and counter > depth:
+                return best
+
+    return best
+
+
+@njit
+def light_two_opt(path, dist):
+    best = path
+    best_dist = cost_helper(path, dist)
+
+    for i in range(len(path)):
+        for j in range(i + 2, len(path)):
+            best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
+            new_cost = cost_helper(best, dist)
+
+            if new_cost < best_dist:
+                return best
     return best
 
 
@@ -166,14 +197,18 @@ def create_route_dist_matrix(routes):
 
 
 @njit
-def fitness_sharing(path_ind, route_dist_matrix, fitness, sigma=0.2, alpha=1):
+def fitness_sharing_with_matrix(path_ind, route_dist_matrix, fitness, sigma=0.2, alpha=1):
+    return fitness_sharing_with_list(route_dist_matrix[path_ind, :], fitness, sigma, alpha)
+
+
+@njit
+def fitness_sharing_with_list(route_distances, fitness, sigma=0.1, alpha=1):
     beta = 1
 
-    for i in range(len(route_dist_matrix)):
-        if i != path_ind:
-            dist = route_dist_matrix[path_ind, i]
-            if dist <= sigma:
-                beta += 1 - (dist / sigma) ** alpha
+    for i in range(len(route_distances)):
+        dist = route_distances[i]
+        if dist <= sigma:
+            beta += 1 - (dist / sigma) ** alpha
 
     result = fitness / beta ** np.sign(fitness)
     return result
@@ -183,12 +218,59 @@ def fitness_sharing(path_ind, route_dist_matrix, fitness, sigma=0.2, alpha=1):
 def cost_helper(path, dist):
     total = 0
 
-    for i in range(len(path) - 1):
+    for i in range(len(path)):
         val = path[i]
-        next_val = path[i + 1]
+        next_val = path[(i + 1) % len(path)]
         total += dist[val][next_val]
 
-    return total + dist[path[len(path) - 1]][0]
+    return total
+
+
+@njit
+def calc_route_distances(indices, routes, route):
+    route_distances = np.ones((len(routes)), dtype=np.float32)
+
+    for i in range(len(indices)):
+        route_distances[indices[i]] = hamming_distance(route, routes[indices[i]])
+
+    return route_distances
+
+
+@njit
+def shared_elimination(population, dist_matrix, keep):
+    """" Population should be alpha+mu """""
+
+    survivors = np.empty(keep, dtype=np.int32)
+    battling = np.arange(len(population))  # Indexes that are still in the game
+    fitness = [1 / cost_helper(x, dist_matrix) for x in population]
+
+    relevant = set()  # Indexes of routes that are relevant to recalculate
+
+    surviving_route_distances = np.empty((keep, len(population)), dtype=np.float32)
+
+    for i in range(len(survivors)):
+        best_battler = 0
+        best_fitness = fitness[battling[best_battler]]
+
+        for e, j in enumerate(battling):
+
+            if j in relevant:
+                fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
+                relevant.remove(j)
+
+            if fitness[j] > best_fitness:
+                best_fitness = fitness[j]
+                best_battler = e
+
+        survivors[i] = battling[best_battler]
+        battling = np.delete(battling, best_battler)
+
+        best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
+        [relevant.add(survivors[i]) for x in best_route_distances if
+         x <= 0.2]  # Add all routes that are close to the best route
+        surviving_route_distances[i] = best_route_distances
+
+    return survivors
 
 
 class Individual:
@@ -204,7 +286,7 @@ class Individual:
         inverse_mutation(self.value, self.mutation_rate)
 
     def local_search_operator(self, dist):
-        two_opt(self.value, dist)
+        light_two_opt(self.value, dist)
 
     def recombine(self, other):
         # Ordered crossover, returns child
@@ -219,7 +301,6 @@ class Population:
 
         self.individuals: list[Individual] = []
         self.init_population()
-        self.route_dist_matrix = None
 
     def init_population(self):
         # Random initialization
@@ -231,15 +312,22 @@ class Population:
         offspring.sort(key=lambda x: self.fitness(x), reverse=True)
         self.individuals = offspring[:self.size]
 
+    def fs_elimination(self, offspring: list[Individual]):
+        # Does elimination and replaces original population (alpha + mu)
+        pop = self.individuals + offspring
+        survivors = shared_elimination(np.array([i.value for i in pop]), self.dist_matrix, self.size)
+
+        self.individuals = [pop[x] for x in survivors]
+
     def selection(self, k) -> Individual:
         # k tournament selection
         possible = random.choices(self.individuals, k=k)
-        possible.sort(key=lambda x: self.fitness_sharing(x), reverse=True)
+        possible.sort(key=lambda x: self.fitness(x), reverse=True)
         return possible[0]
 
-    def update_route_dist_matrix(self):
-        values = np.array([i.value for i in self.individuals])
-        self.route_dist_matrix = create_route_dist_matrix(values)
+    # def update_route_dist_matrix(self):
+    #     values = np.array([i.value for i in self.individuals])
+    #     self.route_dist_matrix = create_route_dist_matrix(values)
 
     def mutate_all(self):
         for ind in self.individuals:
@@ -253,10 +341,8 @@ class Population:
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
 
-    def fitness_sharing(self, individual: Individual) -> float:
-        return fitness_sharing(self.individuals.index(individual), self.route_dist_matrix, self.fitness(individual))
-
-
+    # def fitness_sharing(self, individual: Individual) -> float:
+    #     return fitness_sharing_with_matrix(self.individuals.index(individual), self.route_dist_matrix, self.fitness(individual))
 
     def cost(self, individual: Individual) -> float:
         return cost_helper(individual.value, self.dist_matrix)
@@ -295,7 +381,7 @@ class TSP:
         offspring = []
 
         # Update route distance matrix for selection fitness sharing
-        self.population.update_route_dist_matrix()
+        # self.population.update_route_dist_matrix()
 
         while len(offspring) < self.offspring_size:
             mother: Individual = self.population.selection(self.k)
@@ -306,15 +392,15 @@ class TSP:
 
         self.population.mutate_all()
 
-        # self.population.ls_all()
+        self.population.ls_all()
 
-        self.population.elimination(offspring)
+        self.population.fs_elimination(offspring)
         return self.population.best(), self.population.best_fitness(), self.population.mean()
 
 
 class r0884600:
     # PARAMETERS
-    stop = 50
+    stop = 300
     population_size = 500
     offspring_size = 1000
     k = 5
@@ -379,11 +465,13 @@ class r0884600:
             step_time += timing
 
             if self.counter % self.log_interval == 0:
-                print("\nIteration: ", self.counter, " (", timing, ")\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
+                print("\nIteration: ", self.counter, " (", timing, ")\nMean: ", self.meanObjective, "\nBest: ",
+                      self.bestObjective,
                       "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix))
 
         print("\nIteration: ", self.counter, "\nMean: ", self.meanObjective, "\nBest: ", self.bestObjective,
-              "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix), "\nAvg step time: ", step_time/self.counter,)
+              "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix), "\nAvg step time: ",
+              step_time / self.counter, )
         return 0
 
 
