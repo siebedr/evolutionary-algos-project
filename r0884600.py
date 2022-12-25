@@ -237,7 +237,17 @@ def calc_route_distances(indices: set, routes, route):
 
 
 @njit
-def shared_elimination(population, dist_matrix, keep):
+def add_survivor(i, fitness, survivors, battling, surviving_route_distances, population):
+    survivors[i] = np.argmax(fitness)
+    battling.remove(survivors[i])
+    fitness[survivors[i]] = -1
+    best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
+    surviving_route_distances[i] = best_route_distances
+    return [y for y, x in enumerate(best_route_distances) if x <= 0.2]
+
+
+@njit
+def shared_elimination(population, dist_matrix, keep, elites):
     """" Population should be alpha+mu """""
 
     survivors = np.empty(keep, dtype=np.int32)
@@ -249,21 +259,19 @@ def shared_elimination(population, dist_matrix, keep):
     surviving_route_distances = np.empty((keep, len(population)), dtype=np.float32)
 
     for i in range(len(survivors)):
-        # Update relevant fitnesses
-        for j in relevant:
-            fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
+        # Update relevant fitness
+        if i >= elites:
+            for j in relevant:
+                fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
 
-        relevant.clear()
+            relevant.clear()
 
-        # Take best fitness
         survivors[i] = np.argmax(fitness)
         battling.remove(survivors[i])
         fitness[survivors[i]] = -1
-
         best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
-        [relevant.add(y) for y, x in enumerate(best_route_distances) if
-         x <= 0.2]  # Add all routes that are close to the best route
         surviving_route_distances[i] = best_route_distances
+        [relevant.add(y) for y, x in enumerate(best_route_distances) if x <= 0.2]
 
     return survivors
 
@@ -272,7 +280,8 @@ class Individual:
     def __init__(self, value, mutation_rate=None):
         self.value = value
         if mutation_rate is None:
-            self.mutation_rate = 0.1 + (0.3 * np.random.rand())
+            # self.mutation_rate = 0.1 + (0.3 * np.random.rand())
+            self.mutation_rate = 0.6
         else:
             self.mutation_rate = mutation_rate
         self.neighbour_dist = None
@@ -290,12 +299,14 @@ class Individual:
 
 
 class Population:
-    def __init__(self, size, dist_matrix):
+    def __init__(self, size, dist_matrix, elites=0):
+        self.route_dist_matrix = None
         self.size = size
         self.dist_matrix = dist_matrix
 
         self.individuals: list[Individual] = []
         self.init_population()
+        self.elites = int(size * elites)
 
     def init_population(self):
         # Random initialization
@@ -304,13 +315,15 @@ class Population:
 
     def elimination(self, offspring: list[Individual]):
         # Does elimination and replaces original population (alpha + mu)
+        offspring += self.individuals[self.elites:]
         offspring.sort(key=lambda x: self.fitness(x), reverse=True)
-        self.individuals = offspring[:self.size]
+        self.individuals = offspring[:(self.size-self.elites)] + self.individuals[:self.elites]
+        self.individuals.sort(key=lambda x: self.fitness(x), reverse=True)
 
     def fs_elimination(self, offspring: list[Individual]):
         # Does elimination and replaces original population (alpha + mu)
         pop = self.individuals + offspring
-        survivors = shared_elimination(np.array([i.value for i in pop]), self.dist_matrix, self.size)
+        survivors = shared_elimination(np.array([i.value for i in pop]), self.dist_matrix, self.size, self.elites)
 
         self.individuals = [pop[x] for x in survivors]
 
@@ -320,12 +333,12 @@ class Population:
         possible.sort(key=lambda x: self.fitness(x), reverse=True)
         return possible[0]
 
-    # def update_route_dist_matrix(self):
-    #     values = np.array([i.value for i in self.individuals])
-    #     self.route_dist_matrix = create_route_dist_matrix(values)
+    def update_route_dist_matrix(self):
+        values = np.array([i.value for i in self.individuals])
+        self.route_dist_matrix = create_route_dist_matrix(values)
 
     def mutate_all(self):
-        for ind in self.individuals:
+        for ind in self.individuals[self.elites:]:
             ind.mutate()
 
     def ls_all(self):
@@ -336,8 +349,9 @@ class Population:
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
 
-    # def fitness_sharing(self, individual: Individual) -> float:
-    #     return fitness_sharing_with_matrix(self.individuals.index(individual), self.route_dist_matrix, self.fitness(individual))
+    def fitness_sharing(self, individual: Individual) -> float:
+        return fitness_sharing_with_matrix(self.individuals.index(individual), self.route_dist_matrix,
+                                           self.fitness(individual))
 
     def cost(self, individual: Individual) -> float:
         return cost_helper(individual.value, self.dist_matrix)
@@ -358,13 +372,13 @@ class Population:
 
 class TSP:
 
-    def __init__(self, distance_matrix, population_size, offspring_size, k):
+    def __init__(self, distance_matrix, population_size, offspring_size, k, elites):
         self.distance_matrix = distance_matrix
         self.population_size = population_size
         self.offspring_size = offspring_size
         self.k = k
 
-        self.population = Population(self.population_size, self.distance_matrix)
+        self.population = Population(self.population_size, self.distance_matrix, elites)
 
     def avg_mut_rate(self):
         total = 0
@@ -387,7 +401,7 @@ class TSP:
 
         self.population.mutate_all()
 
-        self.population.ls_all()
+        # self.population.ls_all()
 
         self.population.fs_elimination(offspring)
         return self.population.best(), self.population.best_fitness(), self.population.mean()
@@ -396,9 +410,10 @@ class TSP:
 class r0884600:
     # PARAMETERS
     stop = 100
-    population_size = 500
-    offspring_size = 1000
+    population_size = 250
+    offspring_size = 500
     k = 5
+    elites = 0.05
 
     no_change = 0
     counter = 0
@@ -441,7 +456,7 @@ class r0884600:
         distanceMatrix = np.loadtxt(filename, delimiter=",")
 
         # Initialize the population.
-        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k)
+        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites)
 
         step_time = 0
 
@@ -472,7 +487,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour50.csv")
+program.optimize("./Data/tour500.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
