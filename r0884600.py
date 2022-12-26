@@ -280,8 +280,8 @@ class Individual:
     def __init__(self, value, mutation_rate=None):
         self.value = value
         if mutation_rate is None:
-            # self.mutation_rate = 0.1 + (0.3 * np.random.rand())
-            self.mutation_rate = 0.6
+            self.mutation_rate = 0.1 + (0.3 * np.random.rand())
+            # self.mutation_rate = 0.6
         else:
             self.mutation_rate = mutation_rate
         self.neighbour_dist = None
@@ -290,11 +290,11 @@ class Individual:
         inverse_mutation(self.value, self.mutation_rate)
 
     def local_search_operator(self, dist):
-        two_opt(self.value, dist)
+        self.value = light_two_opt(self.value, dist)
 
     def recombine(self, other):
         # Ordered crossover, returns child
-        child, mut_rate = PMX_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
+        child, mut_rate = ordered_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
         return Individual(child, mut_rate)
 
 
@@ -341,10 +341,6 @@ class Population:
         for ind in self.individuals[self.elites:]:
             ind.mutate()
 
-    def ls_all(self):
-        for ind in self.individuals:
-            ind.local_search_operator(self.dist_matrix)
-
     # METRICS
     def fitness(self, individual: Individual) -> float:
         return 1 / self.cost(individual)
@@ -380,6 +376,10 @@ class TSP:
 
         self.population = Population(self.population_size, self.distance_matrix, elites)
 
+    def ls_all(self, ls_individuals):
+        for ind in ls_individuals:
+            ind.local_search_operator(self.distance_matrix)
+
     def avg_mut_rate(self):
         total = 0
         for ind in self.population.individuals:
@@ -401,7 +401,7 @@ class TSP:
 
         self.population.mutate_all()
 
-        # self.population.ls_all()
+        self.ls_all(self.population.individuals[:self.population.elites])
 
         self.population.fs_elimination(offspring)
         return self.population.best(), self.population.best_fitness(), self.population.mean()
@@ -410,8 +410,8 @@ class TSP:
 class r0884600:
     # PARAMETERS
     stop = 100
-    population_size = 250
-    offspring_size = 500
+    population_size = 50
+    offspring_size = 100
     k = 5
     elites = 0.05
 
