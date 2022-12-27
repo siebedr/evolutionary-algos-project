@@ -154,8 +154,11 @@ def light_two_opt(path, dist):
     best_dist = cost_helper(path, dist)
 
     for i in range(len(path)):
-        for j in range(i + 2, len(path)):
-            best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
+        len_subtour = len(path) - (i + 2)
+        for j in range(len_subtour):
+            start_index = np.random.randint(len_subtour)
+            ind = i + 2 + (j + start_index) % len_subtour
+            best = np.concatenate((path[:i], path[i:ind + 1][::-1], path[ind + 1:]))
             new_cost = cost_helper(best, dist)
 
             if new_cost < best_dist:
@@ -202,7 +205,7 @@ def fitness_sharing_with_matrix(path_ind, route_dist_matrix, fitness, sigma=0.2,
 
 
 @njit
-def fitness_sharing_with_list(route_distances, fitness, sigma=0.2, alpha=1):
+def fitness_sharing_with_list(route_distances, fitness, sigma=0.5, alpha=1):
     beta = 0
 
     for i in range(len(route_distances)):
@@ -274,6 +277,20 @@ def shared_elimination(population, dist_matrix, keep, elites):
         [relevant.add(y) for y, x in enumerate(best_route_distances) if x <= 0.2]
 
     return survivors
+
+
+# def init_legal_paths(size, dist_matrix,):
+#     """Initial population diversification by adding (almost) legal paths"""
+#     paths = np.empty(size, dtype=np.int32)
+#
+#     for i in range(size):
+#         possible_nodes = set([i for i in range(len(dist_matrix))])
+#         node = np.random.choice(list(possible_nodes))
+#         for j in range(len(dist_matrix)):
+
+
+
+
 
 
 class Individual:
@@ -487,7 +504,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour500.csv")
+program.optimize("./Data/tour250.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
