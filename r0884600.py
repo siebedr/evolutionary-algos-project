@@ -49,8 +49,7 @@ def ordered_crossover(path1, path2, mut_1, mut_2):
     for i in range(start_node):
         child[i] = other_values.pop(0)
 
-    for i in range(start_node, end_node):
-        child[i] = path1[i]
+    child[start_node:end_node] = path1[start_node:end_node]
 
     for i in range(end_node, len(path1)):
         child[i] = other_values.pop(0)
@@ -161,7 +160,7 @@ def light_two_opt(path, dist):
             best = np.concatenate((path[:i], path[i:ind + 1][::-1], path[ind + 1:]))
             new_cost = cost_helper(best, dist)
 
-            if new_cost < best_dist:
+            if new_cost <= best_dist:
                 return best
     return best
 
@@ -279,18 +278,34 @@ def shared_elimination(population, dist_matrix, keep, elites):
     return survivors
 
 
-# def init_legal_paths(size, dist_matrix,):
-#     """Initial population diversification by adding (almost) legal paths"""
-#     paths = np.empty(size, dtype=np.int32)
-#
-#     for i in range(size):
-#         possible_nodes = set([i for i in range(len(dist_matrix))])
-#         node = np.random.choice(list(possible_nodes))
-#         for j in range(len(dist_matrix)):
+@njit
+def init_NN_path(dist_matrix):
+    """Initial population diversification by adding nearest neighbour paths"""
+    found = False
+    path = np.empty(len(dist_matrix), dtype=np.int32)
 
+    while not found:
+        possible_nodes = set([i for i in range(len(dist_matrix))])
+        path[0] = np.random.randint(len(dist_matrix))
+        possible_nodes.remove(path[0])
+        found = True
 
+        for i in range(1, len(dist_matrix)):
+            best = np.inf
+            best_node = -1
+            for j in possible_nodes:
+                if dist_matrix[path[i - 1]][j] < best:
+                    best = dist_matrix[path[i - 1]][j]
+                    best_node = j
 
+            if best_node == -1:
+                found = False
+                break
 
+            path[i] = best_node
+            possible_nodes.remove(best_node)
+
+    return path
 
 
 class Individual:
@@ -325,10 +340,16 @@ class Population:
         self.init_population()
         self.elites = int(size * elites)
 
-    def init_population(self):
+    def init_population(self, random_part=0.8):
         # Random initialization
-        while len(self.individuals) < self.size:
+        random_size = int(self.size * random_part)
+        others = self.size - random_size
+
+        while len(self.individuals) < random_size:
             self.individuals.append(Individual(np.random.permutation(len(self.dist_matrix))))
+
+        while len(self.individuals) < random_size+others:
+            self.individuals.append(Individual(init_NN_path(self.dist_matrix)))
 
     def elimination(self, offspring: list[Individual]):
         # Does elimination and replaces original population (alpha + mu)
@@ -418,7 +439,7 @@ class TSP:
 
         self.population.mutate_all()
 
-        self.ls_all(self.population.individuals[:self.population.elites])
+        #self.ls_all(self.population.individuals[:self.population.elites])
 
         self.population.fs_elimination(offspring)
         return self.population.best(), self.population.best_fitness(), self.population.mean()
@@ -473,8 +494,9 @@ class r0884600:
         distanceMatrix = np.loadtxt(filename, delimiter=",")
 
         # Initialize the population.
+        init_start = time.time()
         tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites)
-
+        print(f"Initialization took {time.time() - init_start} seconds")
         step_time = 0
 
         # Run the algorithm until termination condition is met.
@@ -504,7 +526,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour250.csv")
+program.optimize("./Data/tour750.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
