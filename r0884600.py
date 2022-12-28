@@ -37,7 +37,14 @@ def inverse_mutation(path, mutation_rate):
 
 
 @njit
-def ordered_crossover(path1, path2, mut_1, mut_2):
+def recombine_self_adaptive_rates(rate1, rate2):
+    # Calculate combined mutation rate
+    beta = 2 * np.random.rand() - 0.5
+    return max(0.1, rate1 + beta * ((rate2 - rate1) - np.random.rand() * 0.005))
+
+
+@njit
+def ordered_crossover(path1, path2):
     rand1 = np.random.randint(len(path1))
     rand2 = np.random.randint(len(path1))
 
@@ -56,15 +63,11 @@ def ordered_crossover(path1, path2, mut_1, mut_2):
     for i in range(end_node, len(path1)):
         child[i] = other_values.pop(0)
 
-    # Calculate combined mutation rate
-    beta = 2 * np.random.rand() - 0.5
-    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
-
-    return child, new_rate
+    return child
 
 
 @njit
-def PMX_crossover(path1, path2, mut_1, mut_2):
+def PMX_crossover(path1, path2):
     rand1 = np.random.randint(len(path1))
     rand2 = np.random.randint(len(path1))
 
@@ -86,15 +89,11 @@ def PMX_crossover(path1, path2, mut_1, mut_2):
             else:
                 child[i] = other_values.pop(0)
 
-    # Calculate combined mutation rate
-    beta = 2 * np.random.rand() - 0.5
-    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
-
-    return child, new_rate
+    return child
 
 
 @njit
-def cycle_crossover(path1, path2, mut_1, mut_2):
+def cycle_crossover(path1, path2):
     child = np.full(len(path1), -1, dtype=np.int32)
     index = np.random.randint(len(path1))
     node = path1[index]
@@ -110,15 +109,11 @@ def cycle_crossover(path1, path2, mut_1, mut_2):
         if child[i] == -1:
             child[i] = path2[i]
 
-    # Calculate combined mutation rate
-    beta = 2 * np.random.rand() - 0.5
-    new_rate = max(0.01, mut_1 + beta * (mut_2 - mut_1))
-
-    return child, new_rate
+    return child
 
 
 @njit
-def two_opt(path, dist, depth=-1):
+def light_two_opt(path, dist, depth=-1):
     # Pre calculate distances
     dists = np.zeros(len(path))
     reverse_dists = np.zeros(len(path))
@@ -127,52 +122,40 @@ def two_opt(path, dist, depth=-1):
         dists[i] = dist[path[i], path[(i + 1) % len(path)]]
         reverse_dists[i] = dist[path[(i + 1) % len(path)], path[i]]
 
+    best_dist = cost_helper(path, dist)
     best = path
-    best_dist = np.sum(dists)
     counter = 0
 
-    for i in range(len(path)):
+    for i in range(1, len(path)):
         for j in range(i + 2, len(path)):
-            new_cost = np.sum(dists[:i])
-            new_cost += np.sum(reverse_dists[i:j + 1])
-            new_cost += np.sum(dists[j + 1:])
-            new_cost += dist[path[i], path[(i + 1) % len(path)]] + dist[path[j], path[(j + 1) % len(path)]]
+            fast_cost = np.sum(dists[:i - 1]) + np.sum(dists[j + 1:]) + np.sum(reverse_dists[i:j]) \
+                        + dist[path[i - 1], path[j]] + dist[path[i], path[(j + 1) % len(path)]]
 
-            if new_cost < best_dist:
-                counter += 1
+            if fast_cost <= best_dist:
                 best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
-                best_dist = new_cost
+                best_dist = fast_cost
+                counter += 1
 
-            if depth != -1 and counter > depth:
-                return best
-
+                if depth != -1 and counter >= depth:
+                    return best
     return best
 
 
 @njit
-def light_two_opt(path, dist):
-    best = path
-    best_dist = cost_helper(path, dist)
+def heuristic_ls(route, dist_matrix, max_size=None):
+    if max_size is None:
+        rand1 = np.random.randint(1, len(route))
+        rand2 = np.random.randint(1, len(route))
 
-    for i in range(len(path)):
-        for j in range(i + 2, len(path)):
-            best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
-            new_cost = cost_helper(best, dist)
+        start_node = min(rand1, rand2)
+        end_node = max(rand1, rand2)
+    else:
+        rand1 = np.random.randint(1, len(route)-max_size)
+        start_node = rand1
+        end_node = np.random.randint(start_node, start_node+max_size)
 
-            if new_cost < best_dist:
-                return best
-    return best
-
-
-@njit
-def heuristic_ls(route, dist_matrix):
-    rand1 = np.random.randint(1, len(route))
-    rand2 = np.random.randint(1, len(route))
-
-    start_node = min(rand1, rand2)
-    end_node = max(rand1, rand2)
-
-    start_cost = sum([dist_matrix[route[x]][route[x+1]] for x in range(start_node-1, end_node)])
+    best = route
+    best_cost = sum([dist_matrix[route[x]][route[x + 1]] for x in range(start_node - 1, end_node)])
 
     for i in range(start_node, end_node):
         possibilities = set(route[start_node:end_node])
@@ -183,9 +166,9 @@ def heuristic_ls(route, dist_matrix):
             best_node = -1
             best_cost = np.inf
             for x in possibilities:
-                if dist_matrix[route[j-1]][x] < best_cost:
+                if dist_matrix[route[j - 1]][x] < best_cost:
                     best_node = x
-                    best_cost = dist_matrix[route[j-1]][x]
+                    best_cost = dist_matrix[route[j - 1]][x]
 
             if best_node != -1:
                 sub_path[j] = best_node
@@ -194,10 +177,10 @@ def heuristic_ls(route, dist_matrix):
             else:
                 break
 
-        if len(possibilities) == 0 and cost < start_cost:
+        if len(possibilities) == 0 and cost < best_cost:
             return np.concatenate((route[:start_node], sub_path, route[end_node:]))
 
-    return route
+    return best
 
 
 @njit
@@ -215,7 +198,17 @@ def compute_similarity(route1, route2):
 @njit
 def hamming_distance(route1, route2):
     # result in percentage
-    return (len(route1) - np.sum(route1 == route2)) / len(route1)
+    counter = 0
+    iter1 = np.where(route1 == 0)[0]
+    iter2 = np.where(route2 == 0)[0]
+
+    for i in range(len(route1)):
+        if route1[iter1] == route2[iter2]:
+            counter += 1
+        iter1 = (iter1 + 1) % len(route1)
+        iter2 = (iter2 + 1) % len(route2)
+
+    return (len(route1) - counter) / len(route1)
 
 
 @njit
@@ -274,17 +267,7 @@ def calc_route_distances(indices: set, routes, route):
 
 
 @njit
-def add_survivor(i, fitness, survivors, battling, surviving_route_distances, population):
-    survivors[i] = np.argmax(fitness)
-    battling.remove(survivors[i])
-    fitness[survivors[i]] = -1
-    best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
-    surviving_route_distances[i] = best_route_distances
-    return [y for y, x in enumerate(best_route_distances) if x <= 0.2]
-
-
-@njit
-def shared_elimination(population, dist_matrix, keep, elites):
+def shared_elimination(population, dist_matrix, keep, elites, sigma=0.2):
     """" Population should be alpha+mu """""
 
     survivors = np.empty(keep, dtype=np.int32)
@@ -299,7 +282,7 @@ def shared_elimination(population, dist_matrix, keep, elites):
         # Update relevant fitness
         if i >= elites:
             for j in relevant:
-                fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j])
+                fitness[j] = fitness_sharing_with_list(surviving_route_distances[:i, j], fitness[j], sigma)
 
             relevant.clear()
 
@@ -308,16 +291,17 @@ def shared_elimination(population, dist_matrix, keep, elites):
         fitness[survivors[i]] = -1
         best_route_distances = calc_route_distances(battling, population, population[survivors[i]])
         surviving_route_distances[i] = best_route_distances
-        [relevant.add(y) for y, x in enumerate(best_route_distances) if x <= 0.2]
+        [relevant.add(y) for y, x in enumerate(best_route_distances) if x <= sigma]
 
     return survivors
 
 
 @njit
 def init_NN_path(dist_matrix):
-    """Initial population diversification by adding nearest neighbour paths"""
+    """Initial population diversification by adding nearest neighbour paths, k can be used to not be too greedy"""
     found = False
     path = np.empty(len(dist_matrix), dtype=np.int32)
+    k = len(dist_matrix)//40
 
     while not found:
         possible_nodes = set([i for i in range(len(dist_matrix))])
@@ -328,7 +312,11 @@ def init_NN_path(dist_matrix):
         for i in range(1, len(dist_matrix)):
             best = np.inf
             best_node = -1
-            for j in possible_nodes:
+
+            perm = np.random.permutation(np.array(list(possible_nodes)))
+            k_nodes = perm[:k]
+
+            for j in k_nodes:
                 if dist_matrix[path[i - 1]][j] < best:
                     best = dist_matrix[path[i - 1]][j]
                     best_node = j
@@ -378,7 +366,7 @@ def init_random_legal_path(dist_matrix):
 
 
 class Individual:
-    def __init__(self, value, mutation_rate=None):
+    def __init__(self, value, mutation_rate=None, exploit_rate=None):
         self.value = value
         if mutation_rate is None:
             self.mutation_rate = 0.1 + (0.3 * np.random.rand())
@@ -387,21 +375,28 @@ class Individual:
             self.mutation_rate = mutation_rate
         self.neighbour_dist = None
 
+        if exploit_rate is None:
+            self.exploit_rate = 0.3 + (0.3 * np.random.rand())
+        else:
+            self.exploit_rate = exploit_rate
+
     def mutate(self):
-        self. value = inverse_mutation(self.value, self.mutation_rate)
+        self.value = inverse_mutation(self.value, self.mutation_rate)
 
     def local_search_operator(self, dist):
         rand = np.random.rand()
 
-        if rand < 0.6:
+        if rand < 1:
             self.value = light_two_opt(self.value, dist)
-        elif rand < 0.9:
-            self.value = heuristic_ls(self.value, dist)
+        else:
+            self.value = heuristic_ls(self.value, dist, len(dist)//4)
 
     def recombine(self, other):
         # Ordered crossover, returns child
-        child, mut_rate = ordered_crossover(self.value, other.value, self.mutation_rate, other.mutation_rate)
-        return Individual(child, mut_rate)
+        child = ordered_crossover(self.value, other.value)
+        mut_rate = recombine_self_adaptive_rates(self.mutation_rate, other.mutation_rate)
+        exp_rate = recombine_self_adaptive_rates(self.exploit_rate, other.exploit_rate)
+        return Individual(child, mut_rate, exp_rate)
 
 
 class Population:
@@ -414,17 +409,21 @@ class Population:
         self.init_population(random_init)
         self.elites = int(size * elites)
 
-    def init_population(self, random_part=0.7, heuristic=0):
+    def init_population(self, random_part=0.7, heuristic=0.5):
         # Random initialization
         random_size = int(self.size * random_part)
-        heuristic_part = int((self.size - random_size)*heuristic)
+        heuristic_part = int((self.size - random_size) * heuristic)
         others = self.size - random_size - heuristic_part
 
         while len(self.individuals) < random_size:
             self.individuals.append(Individual(np.random.permutation(len(self.dist_matrix))))
 
-        while len(self.individuals) < random_size + heuristic_part:
-            self.individuals.append(Individual(init_NN_path(self.dist_matrix)))
+        heuristics = []
+        while len(heuristics) < heuristic_part*4:
+            heuristics.append(init_NN_path(self.dist_matrix))
+
+        survivors = shared_elimination(np.array(heuristics), self.dist_matrix, heuristic_part, 0, 0.8)
+        [self.individuals.append(Individual(heuristics[x])) for x in survivors]
 
         while len(self.individuals) < random_size + others:
             self.individuals.append(Individual(init_random_legal_path(self.dist_matrix)))
@@ -433,7 +432,7 @@ class Population:
         # Does elimination and replaces original population (alpha + mu)
         offspring += self.individuals[self.elites:]
         offspring.sort(key=lambda x: self.fitness(x), reverse=True)
-        self.individuals = offspring[:(self.size-self.elites)] + self.individuals[:self.elites]
+        self.individuals = offspring[:(self.size - self.elites)] + self.individuals[:self.elites]
         self.individuals.sort(key=lambda x: self.fitness(x), reverse=True)
 
     def fs_elimination(self, offspring: list[Individual]):
@@ -525,13 +524,13 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 200
-    population_size = 10
-    offspring_size = 20
-    k = 5
+    stop = 50
+    population_size = 100
+    offspring_size = 100
+    k = 4
     elites = 0.1
 
-    random_init = 0.7
+    random_init = 0.8
 
     no_change = 0
     counter = 0
@@ -541,7 +540,7 @@ class r0884600:
     bestSolution: Individual = None
     prev_obj = 0
 
-    log_interval = 50
+    log_interval = 10
 
     def __init__(self):
         self.reporter = Reporter.Reporter(self.__class__.__name__)
@@ -616,7 +615,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour250.csv")
+program.optimize("./Data/tour50.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
