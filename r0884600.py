@@ -19,6 +19,8 @@ def swap_mutation(path, mutation_rate):
         path[new_index1] = path[new_index2]
         path[new_index2] = swap
 
+    return path
+
 
 @njit
 def inverse_mutation(path, mutation_rate):
@@ -30,8 +32,8 @@ def inverse_mutation(path, mutation_rate):
         end_node = max(rand1, rand2)
 
         path[start_node:end_node] = path[start_node:end_node][::-1]
-        return start_node, end_node
-    return 0, 0
+
+    return path
 
 
 @njit
@@ -153,16 +155,49 @@ def light_two_opt(path, dist):
     best_dist = cost_helper(path, dist)
 
     for i in range(len(path)):
-        len_subtour = len(path) - (i + 2)
-        for j in range(len_subtour):
-            start_index = np.random.randint(len_subtour)
-            ind = i + 2 + (j + start_index) % len_subtour
-            best = np.concatenate((path[:i], path[i:ind + 1][::-1], path[ind + 1:]))
+        for j in range(i + 2, len(path)):
+            best = np.concatenate((path[:i], path[i:j + 1][::-1], path[j + 1:]))
             new_cost = cost_helper(best, dist)
 
-            if new_cost <= best_dist:
+            if new_cost < best_dist:
                 return best
     return best
+
+
+@njit
+def heuristic_ls(route, dist_matrix):
+    rand1 = np.random.randint(1, len(route))
+    rand2 = np.random.randint(1, len(route))
+
+    start_node = min(rand1, rand2)
+    end_node = max(rand1, rand2)
+
+    start_cost = sum([dist_matrix[route[x]][route[x+1]] for x in range(start_node-1, end_node)])
+
+    for i in range(start_node, end_node):
+        possibilities = set(route[start_node:end_node])
+        sub_path = np.empty(len(possibilities), dtype=np.int32)
+        cost = 0
+
+        for j in range(end_node - start_node):
+            best_node = -1
+            best_cost = np.inf
+            for x in possibilities:
+                if dist_matrix[route[j-1]][x] < best_cost:
+                    best_node = x
+                    best_cost = dist_matrix[route[j-1]][x]
+
+            if best_node != -1:
+                sub_path[j] = best_node
+                possibilities.remove(best_node)
+                cost += best_cost
+            else:
+                break
+
+        if len(possibilities) == 0 and cost < start_cost:
+            return np.concatenate((route[:start_node], sub_path, route[end_node:]))
+
+    return route
 
 
 @njit
@@ -204,7 +239,7 @@ def fitness_sharing_with_matrix(path_ind, route_dist_matrix, fitness, sigma=0.2,
 
 
 @njit
-def fitness_sharing_with_list(route_distances, fitness, sigma=0.5, alpha=1):
+def fitness_sharing_with_list(route_distances, fitness, sigma=0.2, alpha=1):
     beta = 0
 
     for i in range(len(route_distances)):
@@ -308,6 +343,40 @@ def init_NN_path(dist_matrix):
     return path
 
 
+def init_random_legal_path(dist_matrix):
+    """Initial population diversification by legal paths"""
+    found = False
+    path = np.empty(len(dist_matrix), dtype=np.int32)
+
+    while not found:
+        possible_nodes = set([i for i in range(len(dist_matrix))])
+        path[0] = np.random.randint(len(dist_matrix))
+        possible_nodes.remove(path[0])
+        found = True
+
+        for i in range(1, len(dist_matrix)):
+            node = -1
+            choices = np.array(list(possible_nodes))
+            for j in possible_nodes:
+                possible = np.random.choice(choices, replace=False)
+                if dist_matrix[path[i - 1]][possible] != float('inf'):
+                    node = possible
+                    break
+
+            if node == -1:
+                found = False
+                break
+
+            path[i] = node
+            possible_nodes.remove(node)
+
+            if len(possible_nodes) == 0 and dist_matrix[path[-1]][path[0]] == float('inf'):
+                found = False
+                break
+
+    return path
+
+
 class Individual:
     def __init__(self, value, mutation_rate=None):
         self.value = value
@@ -319,10 +388,15 @@ class Individual:
         self.neighbour_dist = None
 
     def mutate(self):
-        inverse_mutation(self.value, self.mutation_rate)
+        self. value = inverse_mutation(self.value, self.mutation_rate)
 
     def local_search_operator(self, dist):
-        self.value = light_two_opt(self.value, dist)
+        rand = np.random.rand()
+
+        if rand < 0.6:
+            self.value = light_two_opt(self.value, dist)
+        elif rand < 0.9:
+            self.value = heuristic_ls(self.value, dist)
 
     def recombine(self, other):
         # Ordered crossover, returns child
@@ -331,25 +405,29 @@ class Individual:
 
 
 class Population:
-    def __init__(self, size, dist_matrix, elites=0):
+    def __init__(self, size, dist_matrix, elites, random_init):
         self.route_dist_matrix = None
         self.size = size
         self.dist_matrix = dist_matrix
 
         self.individuals: list[Individual] = []
-        self.init_population()
+        self.init_population(random_init)
         self.elites = int(size * elites)
 
-    def init_population(self, random_part=0.8):
+    def init_population(self, random_part=0.7, heuristic=0):
         # Random initialization
         random_size = int(self.size * random_part)
-        others = self.size - random_size
+        heuristic_part = int((self.size - random_size)*heuristic)
+        others = self.size - random_size - heuristic_part
 
         while len(self.individuals) < random_size:
             self.individuals.append(Individual(np.random.permutation(len(self.dist_matrix))))
 
-        while len(self.individuals) < random_size+others:
+        while len(self.individuals) < random_size + heuristic_part:
             self.individuals.append(Individual(init_NN_path(self.dist_matrix)))
+
+        while len(self.individuals) < random_size + others:
+            self.individuals.append(Individual(init_random_legal_path(self.dist_matrix)))
 
     def elimination(self, offspring: list[Individual]):
         # Does elimination and replaces original population (alpha + mu)
@@ -406,13 +484,13 @@ class Population:
 
 class TSP:
 
-    def __init__(self, distance_matrix, population_size, offspring_size, k, elites):
+    def __init__(self, distance_matrix, population_size, offspring_size, k, elites, random_init):
         self.distance_matrix = distance_matrix
         self.population_size = population_size
         self.offspring_size = offspring_size
         self.k = k
 
-        self.population = Population(self.population_size, self.distance_matrix, elites)
+        self.population = Population(self.population_size, self.distance_matrix, elites, random_init)
 
     def ls_all(self, ls_individuals):
         for ind in ls_individuals:
@@ -439,7 +517,7 @@ class TSP:
 
         self.population.mutate_all()
 
-        #self.ls_all(self.population.individuals[:self.population.elites])
+        self.ls_all(offspring)
 
         self.population.fs_elimination(offspring)
         return self.population.best(), self.population.best_fitness(), self.population.mean()
@@ -447,11 +525,13 @@ class TSP:
 
 class r0884600:
     # PARAMETERS
-    stop = 100
-    population_size = 50
-    offspring_size = 100
+    stop = 200
+    population_size = 10
+    offspring_size = 20
     k = 5
-    elites = 0.05
+    elites = 0.1
+
+    random_init = 0.7
 
     no_change = 0
     counter = 0
@@ -485,6 +565,16 @@ class r0884600:
 
         return self.no_change != self.stop
 
+    def termination_on_mean_diff_converged(self):
+        if self.bestObjective - self.meanObjective < self.prev_obj:
+            self.no_change += 1
+        else:
+            self.no_change = 0
+
+        self.prev_obj = self.bestObjective - self.meanObjective
+
+        return self.no_change != self.stop
+
     def termination_on_fixed_iterations(self, iteration):
         return self.counter != iteration
 
@@ -495,7 +585,7 @@ class r0884600:
 
         # Initialize the population.
         init_start = time.time()
-        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites)
+        tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites, self.random_init)
         print(f"Initialization took {time.time() - init_start} seconds")
         step_time = 0
 
@@ -526,7 +616,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour750.csv")
+program.optimize("./Data/tour250.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
