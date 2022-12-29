@@ -150,9 +150,9 @@ def heuristic_ls(route, dist_matrix, max_size=None):
         start_node = min(rand1, rand2)
         end_node = max(rand1, rand2)
     else:
-        rand1 = np.random.randint(1, len(route)-max_size)
+        rand1 = np.random.randint(1, len(route) - max_size)
         start_node = rand1
-        end_node = np.random.randint(start_node, start_node+max_size)
+        end_node = np.random.randint(start_node, start_node + max_size)
 
     best = route
     best_cost = sum([dist_matrix[route[x]][route[x + 1]] for x in range(start_node - 1, end_node)])
@@ -181,6 +181,25 @@ def heuristic_ls(route, dist_matrix, max_size=None):
             return np.concatenate((route[:start_node], sub_path, route[end_node:]))
 
     return best
+
+
+@njit
+def greedy_insert_ls(route, dist_matrix):
+    city_pos = np.random.randint(1, len(route)-1)
+    cost = dist_matrix[route[city_pos - 1]][route[city_pos]] + dist_matrix[route[city_pos]][route[city_pos + 1]]
+    new_pos = city_pos
+
+    route_without = np.concatenate((route[:city_pos], route[city_pos+1:]))
+
+    for i in range(1, len(route_without)):
+        c = dist_matrix[route[i - 1]][route[city_pos]] + dist_matrix[route[city_pos]][route[i]]
+        if c < cost:
+            new_pos = i
+
+    new_route = route_without[:new_pos]
+    new_route = np.append(new_route, route[city_pos])
+
+    return np.concatenate((new_route, route_without[new_pos:]))
 
 
 @njit
@@ -267,9 +286,8 @@ def calc_route_distances(indices: set, routes, route):
 
 
 @njit
-def shared_elimination(population, dist_matrix, keep, elites, sigma=0.2):
+def shared_elimination(population, dist_matrix, keep, elites, sigma=0.1):
     """" Population should be alpha+mu """""
-
     survivors = np.empty(keep, dtype=np.int32)
     battling = set([i for i in range(len(population))])  # Indexes that are still in the game
     fitness = np.array([1 / cost_helper(x, dist_matrix) for x in population])
@@ -301,7 +319,11 @@ def init_NN_path(dist_matrix):
     """Initial population diversification by adding nearest neighbour paths, k can be used to not be too greedy"""
     found = False
     path = np.empty(len(dist_matrix), dtype=np.int32)
-    k = len(dist_matrix)//40
+
+    if len(dist_matrix) > 500:
+        k = len(dist_matrix) // 4
+    else:
+        k = len(dist_matrix) // 50
 
     while not found:
         possible_nodes = set([i for i in range(len(dist_matrix))])
@@ -376,7 +398,7 @@ class Individual:
         self.neighbour_dist = None
 
         if exploit_rate is None:
-            self.exploit_rate = 0.3 + (0.3 * np.random.rand())
+            self.exploit_rate = 0.2 + (0.3 * np.random.rand())
         else:
             self.exploit_rate = exploit_rate
 
@@ -386,10 +408,16 @@ class Individual:
     def local_search_operator(self, dist):
         rand = np.random.rand()
 
-        if rand < 1:
-            self.value = light_two_opt(self.value, dist)
+        if rand < self.exploit_rate:
+            if len(dist) > 500:
+                self.value = greedy_insert_ls(self.value, dist)
+            else:
+                self.value = light_two_opt(self.value, dist)
         else:
-            self.value = heuristic_ls(self.value, dist, len(dist)//4)
+            if len(dist) > 500:
+                self.value = heuristic_ls(self.value, dist, len(dist) // 4)
+            else:
+                self.value = heuristic_ls(self.value, dist, len(dist) // 2)
 
     def recombine(self, other):
         # Ordered crossover, returns child
@@ -419,10 +447,10 @@ class Population:
             self.individuals.append(Individual(np.random.permutation(len(self.dist_matrix))))
 
         heuristics = []
-        while len(heuristics) < heuristic_part*4:
+        while len(heuristics) < heuristic_part * 4:
             heuristics.append(init_NN_path(self.dist_matrix))
 
-        survivors = shared_elimination(np.array(heuristics), self.dist_matrix, heuristic_part, 0, 0.8)
+        survivors = shared_elimination(np.array(heuristics), self.dist_matrix, heuristic_part, 0, 0.6)
         [self.individuals.append(Individual(heuristics[x])) for x in survivors]
 
         while len(self.individuals) < random_size + others:
@@ -525,12 +553,12 @@ class TSP:
 class r0884600:
     # PARAMETERS
     stop = 50
-    population_size = 100
-    offspring_size = 100
-    k = 4
+    population_size = 30
+    offspring_size = 50
+    k = 5
     elites = 0.1
 
-    random_init = 0.8
+    random_init = 0.5
 
     no_change = 0
     counter = 0
@@ -581,6 +609,14 @@ class r0884600:
     def optimize(self, filename):
         # Read distance matrix from file.
         distanceMatrix = np.loadtxt(filename, delimiter=",")
+        self.stop = len(distanceMatrix)//2
+
+        if len(distanceMatrix) > 400:
+            self.population_size = 10
+            self.offspring_size = 20
+        else:
+            self.population_size = 30
+            self.offspring_size = 50
 
         # Initialize the population.
         init_start = time.time()
@@ -615,8 +651,7 @@ class r0884600:
 
 program = r0884600()
 start = time.time()
-program.optimize("./Data/tour50.csv")
+program.optimize("./Data/tour500.csv")
 end = time.time()
 print("\nRUNTIME: ", end - start)
 basic_plot()
-plot_mutation_rate()
