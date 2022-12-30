@@ -185,11 +185,11 @@ def heuristic_ls(route, dist_matrix, max_size=None):
 
 @njit
 def greedy_insert_ls(route, dist_matrix):
-    city_pos = np.random.randint(1, len(route)-1)
+    city_pos = np.random.randint(1, len(route) - 1)
     cost = dist_matrix[route[city_pos - 1]][route[city_pos]] + dist_matrix[route[city_pos]][route[city_pos + 1]]
     new_pos = city_pos
 
-    route_without = np.concatenate((route[:city_pos], route[city_pos+1:]))
+    route_without = np.concatenate((route[:city_pos], route[city_pos + 1:]))
 
     for i in range(1, len(route_without)):
         c = dist_matrix[route[i - 1]][route[city_pos]] + dist_matrix[route[city_pos]][route[i]]
@@ -320,7 +320,9 @@ def init_NN_path(dist_matrix):
     found = False
     path = np.empty(len(dist_matrix), dtype=np.int32)
 
-    if len(dist_matrix) > 500:
+    if 250 < len(dist_matrix) < 700:
+        k = len(dist_matrix) // 10
+    elif len(dist_matrix) >= 700:
         k = len(dist_matrix) // 4
     else:
         k = len(dist_matrix) // 50
@@ -398,7 +400,7 @@ class Individual:
         self.neighbour_dist = None
 
         if exploit_rate is None:
-            self.exploit_rate = 0.2 + (0.3 * np.random.rand())
+            self.exploit_rate = 0.3 + (0.3 * np.random.rand())
         else:
             self.exploit_rate = exploit_rate
 
@@ -452,6 +454,9 @@ class Population:
 
         survivors = shared_elimination(np.array(heuristics), self.dist_matrix, heuristic_part, 0, 0.6)
         [self.individuals.append(Individual(heuristics[x])) for x in survivors]
+
+        # while len(self.individuals) < random_size + heuristic_part:
+        #     self.individuals.append(Individual(init_NN_path(self.dist_matrix)))
 
         while len(self.individuals) < random_size + others:
             self.individuals.append(Individual(init_random_legal_path(self.dist_matrix)))
@@ -558,7 +563,7 @@ class r0884600:
     k = 5
     elites = 0.1
 
-    random_init = 0.5
+    random_init = 0.7
 
     no_change = 0
     counter = 0
@@ -570,8 +575,11 @@ class r0884600:
 
     log_interval = 10
 
-    def __init__(self):
-        self.reporter = Reporter.Reporter(self.__class__.__name__)
+    def __init__(self, name=None):
+        if name is None:
+            self.reporter = Reporter.Reporter(self.__class__.__name__)
+        else:
+            self.reporter = Reporter.Reporter(name)
 
     def termination_on_best_converged(self):
         if self.prev_obj >= self.bestObjective:
@@ -609,19 +617,23 @@ class r0884600:
     def optimize(self, filename):
         # Read distance matrix from file.
         distanceMatrix = np.loadtxt(filename, delimiter=",")
-        self.stop = len(distanceMatrix)//2
+
+        if len(distanceMatrix) >= 100:
+            self.stop = len(distanceMatrix) // 2
 
         if len(distanceMatrix) > 400:
             self.population_size = 10
             self.offspring_size = 20
         else:
-            self.population_size = 30
+            self.population_size = 25
             self.offspring_size = 50
 
         # Initialize the population.
-        init_start = time.time()
+        # init_start = time.time()
         tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites, self.random_init)
-        print(f"Initialization took {time.time() - init_start} seconds")
+
+        # print(f"Initialization took {time.time() - init_start} seconds")
+
         step_time = 0
 
         # Run the algorithm until termination condition is met.
@@ -649,9 +661,16 @@ class r0884600:
         return 0
 
 
-program = r0884600()
-start = time.time()
-program.optimize("./Data/tour500.csv")
-end = time.time()
-print("\nRUNTIME: ", end - start)
-basic_plot()
+# program = r0884600()
+# start = time.time()
+# program.optimize("./Data/tour1000.csv")
+# end = time.time()
+# print("\nRUNTIME: ", end - start)
+#basic_plot("Best run for tour 1000")
+
+# for i in range(1000):
+#     program = r0884600("./Tests/test_" + str(i))
+#     start = time.time()
+#     program.optimize("./Data/tour50.csv")
+#     end = time.time()
+#     print("\nIT ", i, ": ", end - start)
