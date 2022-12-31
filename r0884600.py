@@ -5,7 +5,6 @@ import numpy as np
 from numba import njit
 
 import Reporter
-from plot import basic_plot, plot_mutation_rate
 
 
 # NUMBA functions to improve speed
@@ -394,7 +393,6 @@ class Individual:
         self.value = value
         if mutation_rate is None:
             self.mutation_rate = 0.1 + (0.3 * np.random.rand())
-            # self.mutation_rate = 0.6
         else:
             self.mutation_rate = mutation_rate
         self.neighbour_dist = None
@@ -454,9 +452,6 @@ class Population:
 
         survivors = shared_elimination(np.array(heuristics), self.dist_matrix, heuristic_part, 0, 0.6)
         [self.individuals.append(Individual(heuristics[x])) for x in survivors]
-
-        # while len(self.individuals) < random_size + heuristic_part:
-        #     self.individuals.append(Individual(init_NN_path(self.dist_matrix)))
 
         while len(self.individuals) < random_size + others:
             self.individuals.append(Individual(init_random_legal_path(self.dist_matrix)))
@@ -536,9 +531,6 @@ class TSP:
 
     def step(self):
         offspring = []
-
-        # Update route distance matrix for selection fitness sharing
-        # self.population.update_route_dist_matrix()
 
         while len(offspring) < self.offspring_size:
             mother: Individual = self.population.selection(self.k)
@@ -629,10 +621,7 @@ class r0884600:
             self.offspring_size = 50
 
         # Initialize the population.
-        # init_start = time.time()
         tsp = TSP(distanceMatrix, self.population_size, self.offspring_size, self.k, self.elites, self.random_init)
-
-        # print(f"Initialization took {time.time() - init_start} seconds")
 
         step_time = 0
 
@@ -659,18 +648,3 @@ class r0884600:
               "\nPath cost: ", cost_helper(self.bestSolution.value, distanceMatrix), "\nAvg step time: ",
               step_time / self.counter, )
         return 0
-
-
-# program = r0884600()
-# start = time.time()
-# program.optimize("./Data/tour1000.csv")
-# end = time.time()
-# print("\nRUNTIME: ", end - start)
-#basic_plot("Best run for tour 1000")
-
-# for i in range(1000):
-#     program = r0884600("./Tests/test_" + str(i))
-#     start = time.time()
-#     program.optimize("./Data/tour50.csv")
-#     end = time.time()
-#     print("\nIT ", i, ": ", end - start)
